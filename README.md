@@ -1,6 +1,6 @@
 # Capacity — David’s training
 
-Private workout planning, manual Peloton and strength logging, knee check-ins, next-day response, and weekly review. Built from the workflow concepts in KneeCapacity, with a new Sites interface and durable per-user storage. Original KneeCapacity remains unchanged; no historic workout data was migrated.
+Private workout planning, manual Peloton and strength logging, knee check-ins, next-day response, weekly review, and durable Apple Health/freddy workout summaries. The Health area supports a free-plan workflow: ask ChatGPT to import a synced workout within freddy's seven-day window, then retain the summary in Capacity for longer-term dashboards. Built from the workflow concepts in KneeCapacity, with a new Sites interface and durable per-user storage. Original KneeCapacity remains unchanged; no historic workout data was migrated.
 
 Starter plan is a proposal, not an individualized exercise prescription. Personalize appointment days, exercises, baseline and physio guidance in settings.
 
