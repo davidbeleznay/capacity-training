@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
 import Training from "./training";
-import { getCapacityUser } from "../lib/auth";
 import { isSupabaseConfigured } from "../lib/supabase/config";
 
 export default async function Home() {
@@ -25,7 +23,5 @@ export default async function Home() {
     );
   }
 
-  const user = await getCapacityUser();
-  if (!user) redirect("/login?next=/");
   return <Training />;
 }
