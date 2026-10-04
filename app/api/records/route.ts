@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getCapacityUser } from "../../../lib/auth";
+import { hasValidOrigin } from "../../../lib/request";
 import { createServerSupabaseClient } from "../../../lib/supabase/server";
 
 const base = z.object({
@@ -142,10 +143,6 @@ const sleep = z.object({
 
 const validators = { workout, checkin, settings, health, wellness, measurement, sleep };
 
-function validOrigin(request: Request) {
-  return request.headers.get("origin") === new URL(request.url).origin;
-}
-
 export async function GET() {
   const user = await getCapacityUser();
   if (!user) return Response.json({ error: "Sign in to load your workouts." }, { status: 401 });
@@ -172,7 +169,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await getCapacityUser();
   if (!user) return Response.json({ error: "Sign in to save your workouts." }, { status: 401 });
-  if (!validOrigin(request)) return Response.json({ error: "Invalid origin" }, { status: 403 });
+  if (!hasValidOrigin(request)) return Response.json({ error: "Invalid origin" }, { status: 403 });
 
   try {
     const raw = await request.text();
@@ -232,7 +229,7 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const user = await getCapacityUser();
   if (!user) return Response.json({ error: "Sign in to delete this record." }, { status: 401 });
-  if (!validOrigin(request)) return Response.json({ error: "Invalid origin" }, { status: 403 });
+  if (!hasValidOrigin(request)) return Response.json({ error: "Invalid origin" }, { status: 403 });
 
   try {
     const raw = await request.text();

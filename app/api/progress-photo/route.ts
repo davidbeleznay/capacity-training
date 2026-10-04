@@ -1,4 +1,5 @@
 import { getCapacityUser } from "../../../lib/auth";
+import { hasValidOrigin } from "../../../lib/request";
 import { createServerSupabaseClient } from "../../../lib/supabase/server";
 
 const BUCKET = "progress-photos";
@@ -8,7 +9,7 @@ const safeKey = (userId: string, key: string) =>
 export async function POST(request: Request) {
   const user = await getCapacityUser();
   if (!user) return Response.json({ error: "Sign in to upload a photo." }, { status: 401 });
-  if (request.headers.get("origin") !== new URL(request.url).origin) {
+  if (!hasValidOrigin(request)) {
     return Response.json({ error: "Invalid origin" }, { status: 403 });
   }
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { getCapacityUser } from "../../../../lib/auth";
+import { hasValidOrigin } from "../../../../lib/request";
 import { createServerSupabaseClient } from "../../../../lib/supabase/server";
 
 type Row = Record<string, string>;
@@ -12,10 +13,6 @@ type ImportedRecord = {
 };
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
-
-function validOrigin(request: Request) {
-  return request.headers.get("origin") === new URL(request.url).origin;
-}
 
 function parseCsv(text: string): Row[] {
   const rows: string[][] = [];
@@ -272,7 +269,7 @@ function uniqueRecords(records: ImportedRecord[]) {
 export async function POST(request: Request) {
   const user = await getCapacityUser();
   if (!user) return Response.json({ error: "Sign in to import workout history." }, { status: 401 });
-  if (!validOrigin(request)) return Response.json({ error: "Invalid origin" }, { status: 403 });
+  if (!hasValidOrigin(request)) return Response.json({ error: "Invalid origin" }, { status: 403 });
 
   try {
     const form = await request.formData();
