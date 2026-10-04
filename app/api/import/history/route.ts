@@ -62,7 +62,7 @@ function parseCsv(text: string): Row[] {
 
 function number(value: string | undefined): number | null {
   if (!value || value === "--") return null;
-  const parsed = Number(value.replace(/,/g, ""));
+  const parsed = Number(value.replace(/[,\s%]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -246,6 +246,29 @@ function combine(peloton: ImportedRecord[], garmin: ImportedRecord[]) {
   return { records: combined, deduplicated };
 }
 
+function informationScore(record: ImportedRecord): number {
+  return Object.values(record.payload).reduce<number>((score, value) => {
+    if (value === null || value === undefined || value === "" || value === 0) return score;
+    if (Array.isArray(value) && value.length === 0) return score;
+    return score + 1;
+  }, 0);
+}
+
+function uniqueRecords(records: ImportedRecord[]) {
+  const unique = new Map<string, ImportedRecord>();
+  let deduplicated = 0;
+  for (const record of records) {
+    const existing = unique.get(record.id);
+    if (!existing) {
+      unique.set(record.id, record);
+      continue;
+    }
+    deduplicated += 1;
+    if (informationScore(record) > informationScore(existing)) unique.set(record.id, record);
+  }
+  return { records: [...unique.values()], deduplicated };
+}
+
 export async function POST(request: Request) {
   const user = await getCapacityUser();
   if (!user) return Response.json({ error: "Sign in to import workout history." }, { status: 401 });
@@ -272,7 +295,8 @@ export async function POST(request: Request) {
       ? garminRecords(parseCsv(await garminFile.text()), user.userId, importedAt)
       : [];
     const result = combine(peloton, garmin);
-    if (!result.records.length) return Response.json({ error: "No workout rows were found." }, { status: 400 });
+    const sourceUnique = uniqueRecords(result.records);
+    if (!sourceUnique.records.length) return Response.json({ error: "No workout rows were found." }, { status: 400 });
 
     const supabase = await createServerSupabaseClient();
     const { data: existingRows, error: existingError } = await supabase
@@ -283,7 +307,7 @@ export async function POST(request: Request) {
     if (existingError) throw existingError;
     const existing = (existingRows ?? []) as ImportedRecord[];
     let matchedExisting = 0;
-    for (const record of result.records) {
+    for (const record of sourceUnique.records) {
       const sourceId = record.payload.sourceId;
       const match = existing.find((candidate) =>
         (typeof sourceId === "string" && candidate.payload.sourceId === sourceId) || sameSession(candidate, record),
@@ -296,17 +320,18 @@ export async function POST(request: Request) {
       matchedExisting += 1;
     }
 
-    for (let index = 0; index < result.records.length; index += 100) {
-      const { error } = await supabase.from("records").upsert(result.records.slice(index, index + 100), { onConflict: "id" });
+    const ready = uniqueRecords(sourceUnique.records);
+    for (let index = 0; index < ready.records.length; index += 100) {
+      const { error } = await supabase.from("records").upsert(ready.records.slice(index, index + 100), { onConflict: "id" });
       if (error) throw error;
     }
 
     return Response.json({
       ok: true,
-      imported: result.records.length,
+      imported: ready.records.length,
       peloton: peloton.length,
       garmin: garmin.length,
-      deduplicated: result.deduplicated + matchedExisting,
+      deduplicated: result.deduplicated + sourceUnique.deduplicated + matchedExisting + ready.deduplicated,
     });
   } catch (error) {
     console.error(error);
