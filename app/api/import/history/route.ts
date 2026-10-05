@@ -7,7 +7,7 @@ type Row = Record<string, string>;
 type ImportedRecord = {
   id: string;
   owner: string;
-  kind: "health";
+  kind: "health" | "wellness" | "sleep";
   day: string;
   payload: Record<string, unknown>;
 };
@@ -207,6 +207,76 @@ function garminRecords(rows: Row[], owner: string, importedAt: string): Imported
   });
 }
 
+function freddyDailyRecords(rows: Row[], owner: string, importedAt: string): ImportedRecord[] {
+  if (rows.length && (!("date" in rows[0]) || !("steps" in rows[0]))) {
+    throw new Error("The freddy daily file does not have the expected columns.");
+  }
+
+  return rows.map((row) => {
+    const day = row.date;
+    const sourceId = `freddy-daily-${day}`;
+    return {
+      id: `${owner}:${sourceId}`,
+      owner,
+      kind: "wellness",
+      day,
+      payload: {
+        provider: "Garmin Connect",
+        sourceId,
+        bodyBatteryMin: number(row.body_battery_min),
+        bodyBatteryMax: number(row.body_battery_max),
+        bodyBatteryCharged: number(row.body_battery_charged),
+        bodyBatteryDrained: number(row.body_battery_drained),
+        restingHeartRate: number(row.resting_heart_rate_bpm),
+        averageStress: number(row.average_stress),
+        maxStress: number(row.max_stress),
+        moderateIntensityMinutes: number(row.moderate_intensity_minutes),
+        vigorousIntensityMinutes: number(row.vigorous_intensity_minutes),
+        steps: number(row.steps),
+        activeEnergy: number(row.active_calories_kcal),
+        importedAt,
+        notes: row.incomplete?.toLowerCase() === "true"
+          ? "Imported from freddy CLI while the current day was still in progress."
+          : "Imported from freddy CLI.",
+      },
+    };
+  });
+}
+
+function freddySleepRecords(rows: Row[], owner: string, importedAt: string): ImportedRecord[] {
+  if (rows.length && (!("wake_date" in rows[0]) || !("sleep_duration_minutes" in rows[0]))) {
+    throw new Error("The freddy sleep file does not have the expected columns.");
+  }
+
+  return rows.map((row) => {
+    const day = row.wake_date;
+    const sourceId = `freddy-sleep-${day}`;
+    return {
+      id: `${owner}:${sourceId}`,
+      owner,
+      kind: "sleep",
+      day,
+      payload: {
+        provider: "Garmin Connect",
+        sourceId,
+        durationMinutes: number(row.sleep_duration_minutes) ?? 0,
+        sleepScore: number(row.sleep_score),
+        deepMinutes: number(row.deep_sleep_minutes),
+        remMinutes: number(row.rem_sleep_minutes),
+        lightMinutes: number(row.light_sleep_minutes),
+        awakeMinutes: number(row.awake_minutes),
+        bedtime: null,
+        wakeTime: null,
+        averageHeartRate: null,
+        averageHrv: number(row.average_hrv_ms_rmssd),
+        bodyBatteryChange: null,
+        importedAt,
+        notes: "Imported from freddy CLI.",
+      },
+    };
+  });
+}
+
 function startTime(payload: Record<string, unknown>) {
   const value = payload.startedAt;
   return typeof value === "string" ? Date.parse(`${value.replace(/Z$/, "")}Z`) : Number.NaN;
@@ -275,10 +345,12 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const garminFile = form.get("garmin");
     const pelotonFile = form.get("peloton");
-    if (!(garminFile instanceof File) && !(pelotonFile instanceof File)) {
-      return Response.json({ error: "Choose at least one Garmin or Peloton CSV file." }, { status: 400 });
+    const freddyDailyFile = form.get("freddyDaily");
+    const freddySleepFile = form.get("freddySleep");
+    if (![garminFile, pelotonFile, freddyDailyFile, freddySleepFile].some((file) => file instanceof File)) {
+      return Response.json({ error: "Choose at least one Garmin, Peloton or freddy CSV file." }, { status: 400 });
     }
-    for (const file of [garminFile, pelotonFile]) {
+    for (const file of [garminFile, pelotonFile, freddyDailyFile, freddySleepFile]) {
       if (file instanceof File && file.size > MAX_FILE_BYTES) {
         return Response.json({ error: `${file.name} is larger than 8 MB.` }, { status: 400 });
       }
@@ -291,9 +363,17 @@ export async function POST(request: Request) {
     const garmin = garminFile instanceof File
       ? garminRecords(parseCsv(await garminFile.text()), user.userId, importedAt)
       : [];
+    const freddyDaily = freddyDailyFile instanceof File
+      ? freddyDailyRecords(parseCsv(await freddyDailyFile.text()), user.userId, importedAt)
+      : [];
+    const freddySleep = freddySleepFile instanceof File
+      ? freddySleepRecords(parseCsv(await freddySleepFile.text()), user.userId, importedAt)
+      : [];
     const result = combine(peloton, garmin);
     const sourceUnique = uniqueRecords(result.records);
-    if (!sourceUnique.records.length) return Response.json({ error: "No workout rows were found." }, { status: 400 });
+    if (!sourceUnique.records.length && !freddyDaily.length && !freddySleep.length) {
+      return Response.json({ error: "No importable rows were found." }, { status: 400 });
+    }
 
     const supabase = await createServerSupabaseClient();
     const { data: existingRows, error: existingError } = await supabase
@@ -318,17 +398,21 @@ export async function POST(request: Request) {
     }
 
     const ready = uniqueRecords(sourceUnique.records);
-    for (let index = 0; index < ready.records.length; index += 100) {
-      const { error } = await supabase.from("records").upsert(ready.records.slice(index, index + 100), { onConflict: "id" });
+    const allRecords = uniqueRecords([...ready.records, ...freddyDaily, ...freddySleep]);
+    for (let index = 0; index < allRecords.records.length; index += 100) {
+      const { error } = await supabase.from("records").upsert(allRecords.records.slice(index, index + 100), { onConflict: "id" });
       if (error) throw error;
     }
 
     return Response.json({
       ok: true,
-      imported: ready.records.length,
+      imported: allRecords.records.length,
+      workouts: ready.records.length,
+      daily: freddyDaily.length,
+      sleep: freddySleep.length,
       peloton: peloton.length,
       garmin: garmin.length,
-      deduplicated: result.deduplicated + sourceUnique.deduplicated + matchedExisting + ready.deduplicated,
+      deduplicated: result.deduplicated + sourceUnique.deduplicated + matchedExisting + ready.deduplicated + allRecords.deduplicated,
     });
   } catch (error) {
     console.error(error);
